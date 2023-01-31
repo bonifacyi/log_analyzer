@@ -10,17 +10,47 @@ import re
 import os
 import gzip
 import json
+import sys
+import logging
+import argparse
 from datetime import datetime
 from collections import defaultdict
 from string import Template
+
+parser = argparse.ArgumentParser(description='Log analyzer')
+parser.add_argument('--config', type=str, default='config.json', help='Path to custom config file')
+args = parser.parse_args()
 
 config = {
     "REPORT_SIZE": 1000,
     "REPORT_DIR": "../data/reports",
     "LOG_DIR": "../data/log",
     "TEMPLATE": "../static/report.html",
-    "LOG_PATTERN": "nginx-access-ui\\.log-(\\d*)(\\.gz)?"
+    "LOG_PATTERN": "nginx-access-ui\\.log-(\\d*)(\\.gz)?",
+    "LOGGING_FILENAME": None,
+    "BAD_MSG_PERC": 20,
 }
+
+try:
+    with open(args.config) as f:
+        cfg = f.read().strip()
+        custom_config = json.loads(cfg) if cfg else dict()
+except FileNotFoundError:
+    print(f'Config file <{args.config}> not found. Close...')
+    sys.exit(1)
+except json.decoder.JSONDecodeError:
+    print(f'Config file <{args.config}> is not valid json. Close...')
+    sys.exit(1)
+
+for key, value in custom_config.items():
+    config[key] = value
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] (%(levelname).1s) %(message)s',
+    datefmt='%Y.%m.%d %H:%M:%S',
+    filename=config["LOGGING_FILENAME"],
+)
 
 
 def get_last_log_file(log_dir, log_pattern):
@@ -134,35 +164,93 @@ def aggregate_log_data(data):
     :return: aggregated_data: dict
     :return: total_request_time: float
     :return: total_count: int
+    :return: bad_log_msg: int
     """
+    bad_log_msg = 0
     total_count = 0
     total_request_time = float()
     aggregated_data = defaultdict(list)
     for request_url, request_time in data:
         if (request_url is None) or (request_time is None):
+            bad_log_msg += 1
             continue
         aggregated_data[request_url].append(request_time)
         total_request_time += request_time
         total_count += 1
 
-    return aggregated_data, total_request_time, total_count
+    return aggregated_data, total_request_time, total_count, bad_log_msg
 
 
-def get_log_report(conf):
+def main(conf):
     """
 
     :param conf: dict
-    :return:
+    :return: None
     """
-    log_dir = os.path.abspath(conf['LOG_DIR'])
-    template_path = os.path.abspath(conf['TEMPLATE'])
+    logging.info('-'*30)
+    logging.info(f'START GENERATING REPORT')
 
-    log_file_path, date, compress = get_last_log_file(log_dir, conf['LOG_PATTERN'])
+    log_dir = os.path.abspath(conf['LOG_DIR'])
+    if os.path.isdir(log_dir):
+        logging.info(f'Log folder <{log_dir}>')
+    else:
+        logging.error(f'Log folder <{log_dir}> not found!')
+        sys.exit(1)
+
+    template_path = os.path.abspath(conf['TEMPLATE'])
+    if os.path.isfile(template_path):
+        logging.info(f'Template html <{template_path}>')
+    else:
+        logging.error(f'Template html <{template_path}> not found!')
+        sys.exit(1)
+
+    report_dir = os.path.abspath(conf['REPORT_DIR'])
+    if os.path.isdir(report_dir):
+        logging.info(f'Report folder <{report_dir}>')
+    else:
+        logging.info(f'Report folder <{report_dir}> not found. It will be created')
+        try:
+            os.makedirs(report_dir)
+        except:
+            logging.exception(f'Make folder <{report_dir}>')
+            sys.exit(1)
+
+    try:
+        log_file_path, date, compress = get_last_log_file(log_dir, conf['LOG_PATTERN'])
+    except:
+        logging.exception('Get last log file error')
+        sys.exit(1)
+
+    if log_file_path is None:
+        logging.info('Nginx log files not found. Close...')
+        sys.exit(0)
+
+    report_file_path = os.path.join(
+        os.path.abspath(conf['REPORT_DIR']),
+        f'report-{date.strftime("%Y")}.{date.strftime("%m")}.{date.strftime("%d")}.html'
+    )
+    if os.path.isfile(report_file_path):
+        logging.info(f'Report file <{report_file_path}> already exist. Close...')
+        sys.exit(0)
 
     open_file = gzip.open(log_file_path, 'rb') if compress else open(log_file_path, 'r')
     log_data = log_data_generator(open_file, compress)
-    aggregated_data, total_request_time, total_count = aggregate_log_data(log_data)
-    open_file.close()
+    try:
+        aggregated_data, total_request_time, total_count, bad_log_msg = aggregate_log_data(log_data)
+    except gzip.BadGzipFile:
+        logging.error(f'Bad gzip file <{log_file_path}>!')
+        open_file.close()
+        sys.exit(1)
+    except:
+        logging.exception('Aggregate log error')
+        open_file.close()
+        sys.exit(1)
+    finally:
+        open_file.close()
+
+    if (100 * bad_log_msg / total_count) >= conf["BAD_MSG_PERC"]:
+        logging.error(f'Count of bad log messages more then limit {conf["BAD_MSG_PERC"]}%')
+        sys.exit(1)
 
     json_table = calculate_json_table(
         aggregated_data,
@@ -171,16 +259,8 @@ def get_log_report(conf):
         conf['REPORT_SIZE']
     )
 
-    report_path = os.path.join(
-        os.path.abspath(conf['REPORT_DIR']),
-        f'report-{date.strftime("%Y")}.{date.strftime("%m")}.{date.strftime("%d")}.html'
-    )
-    rendering_report(json_table, template_path, report_path)
-
-
-def main():
-    get_log_report(config)
+    rendering_report(json_table, template_path, report_file_path)
 
 
 if __name__ == "__main__":
-    main()
+    main(config)

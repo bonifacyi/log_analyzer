@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .idea/
 data/
+log_analyzer/log_analyzer.log
 
 # C extensions
 *.so

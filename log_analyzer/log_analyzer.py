@@ -187,7 +187,7 @@ def main(conf):
     :param conf: dict
     :return: None
     """
-    logging.info('-'*30)
+    logging.info('-'*50)
     logging.info(f'START GENERATING REPORT')
 
     log_dir = os.path.abspath(conf['LOG_DIR'])
@@ -218,19 +218,19 @@ def main(conf):
     try:
         log_file_path, date, compress = get_last_log_file(log_dir, conf['LOG_PATTERN'])
     except:
-        logging.exception('Get last log file error')
+        logging.exception('Get last log file error. Close')
         sys.exit(1)
-
+    logging.info(f'Last nginx log file: {log_file_path}')
     if log_file_path is None:
-        logging.info('Nginx log files not found. Close...')
+        logging.info('Nginx log files not found. Close')
         sys.exit(0)
 
     report_file_path = os.path.join(
-        os.path.abspath(conf['REPORT_DIR']),
+        report_dir,
         f'report-{date.strftime("%Y")}.{date.strftime("%m")}.{date.strftime("%d")}.html'
     )
     if os.path.isfile(report_file_path):
-        logging.info(f'Report file <{report_file_path}> already exist. Close...')
+        logging.info(f'Report file <{report_file_path}> already exist. Close')
         sys.exit(0)
 
     open_file = gzip.open(log_file_path, 'rb') if compress else open(log_file_path, 'r')
@@ -238,28 +238,38 @@ def main(conf):
     try:
         aggregated_data, total_request_time, total_count, bad_log_msg = aggregate_log_data(log_data)
     except gzip.BadGzipFile:
-        logging.error(f'Bad gzip file <{log_file_path}>!')
+        logging.error(f'Bad gzip file <{log_file_path}>. Close')
         open_file.close()
         sys.exit(1)
     except:
-        logging.exception('Aggregate log error')
+        logging.exception('Aggregate log error. Close')
         open_file.close()
         sys.exit(1)
     finally:
         open_file.close()
 
+    logging.info(f'Parsed {total_count} notices, {bad_log_msg} unable to parse, found {len(aggregated_data)} urls')
+
     if (100 * bad_log_msg / total_count) >= conf["BAD_MSG_PERC"]:
         logging.error(f'Count of bad log messages more then limit {conf["BAD_MSG_PERC"]}%')
         sys.exit(1)
 
-    json_table = calculate_json_table(
-        aggregated_data,
-        total_request_time,
-        total_count,
-        conf['REPORT_SIZE']
-    )
+    try:
+        json_table = calculate_json_table(
+            aggregated_data,
+            total_request_time,
+            total_count,
+            conf['REPORT_SIZE']
+        )
+    except:
+        logging.exception(f'Generate json error. Close')
+        sys.exit(1)
 
-    rendering_report(json_table, template_path, report_file_path)
+    try:
+        rendering_report(json_table, template_path, report_file_path)
+    except:
+        logging.exception('Rendering report error. Close')
+        sys.exit(1)
 
 
 if __name__ == "__main__":

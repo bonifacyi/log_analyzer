@@ -14,7 +14,7 @@ import sys
 import logging
 import argparse
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from string import Template
 
 parser = argparse.ArgumentParser(description='Log analyzer')
@@ -79,7 +79,15 @@ def get_last_log_file(log_dir, log_pattern):
         log_file_path = os.path.join(log_dir, log_file_path)
         log_date = datetime.strptime(str(log_date), '%Y%m%d')
 
-    return log_file_path, log_date, log_compress
+    log_file_meta = ['log_file_path', 'year', 'month', 'day', 'compress']
+    Meta = namedtuple('Meta', log_file_meta)
+    return Meta(
+        log_file_path,
+        log_date.strftime('%Y'),
+        log_date.strftime('%m'),
+        log_date.strftime('%d'),
+        log_compress
+    )
 
 
 def log_data_generator(open_file, log_compress=None):
@@ -216,29 +224,30 @@ def main(conf):
             sys.exit(1)
 
     try:
-        log_file_path, date, compress = get_last_log_file(log_dir, conf['LOG_PATTERN'])
+        log_meta = get_last_log_file(log_dir, conf['LOG_PATTERN'])
     except:
         logging.exception('Get last log file error. Close')
         sys.exit(1)
-    logging.info(f'Last nginx log file: {log_file_path}')
-    if log_file_path is None:
+    logging.info(f'Last nginx log file: {log_meta.log_file_path}')
+    if log_meta.log_file_path is None:
         logging.info('Nginx log files not found. Close')
         sys.exit(0)
 
     report_file_path = os.path.join(
         report_dir,
-        f'report-{date.strftime("%Y")}.{date.strftime("%m")}.{date.strftime("%d")}.html'
+        f'report-{log_meta.year}.{log_meta.month}.{log_meta.day}.html'
     )
     if os.path.isfile(report_file_path):
         logging.info(f'Report file <{report_file_path}> already exist. Close')
         sys.exit(0)
 
-    open_file = gzip.open(log_file_path, 'rb') if compress else open(log_file_path, 'r')
-    log_data = log_data_generator(open_file, compress)
+    logging.info('Read nginx log file...')
+    open_file = gzip.open(log_meta.log_file_path, 'rb') if log_meta.compress else open(log_meta.log_file_path, 'r')
+    log_data = log_data_generator(open_file, log_meta.compress)
     try:
         aggregated_data, total_request_time, total_count, bad_log_msg = aggregate_log_data(log_data)
     except gzip.BadGzipFile:
-        logging.error(f'Bad gzip file <{log_file_path}>. Close')
+        logging.error(f'Bad gzip file <{log_meta.log_file_path}>. Close')
         open_file.close()
         sys.exit(1)
     except:
@@ -254,6 +263,7 @@ def main(conf):
         logging.error(f'Count of bad log messages more then limit {conf["BAD_MSG_PERC"]}%')
         sys.exit(1)
 
+    logging.info('Calculate and convert json report')
     try:
         json_table = calculate_json_table(
             aggregated_data,
@@ -264,12 +274,14 @@ def main(conf):
     except:
         logging.exception(f'Generate json error. Close')
         sys.exit(1)
+    logging.info('Calculate and convert json report success')
 
     try:
         rendering_report(json_table, template_path, report_file_path)
     except:
         logging.exception('Rendering report error. Close')
         sys.exit(1)
+    logging.info(f'Report is ready <{report_file_path}>')
 
 
 if __name__ == "__main__":

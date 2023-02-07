@@ -16,9 +16,9 @@ import argparse
 from datetime import datetime
 from collections import defaultdict, namedtuple
 from string import Template
-
+print(os.getcwd())
 parser = argparse.ArgumentParser(description='Log analyzer')
-parser.add_argument('--config', type=str, default='config.json', help='Path to custom config file')
+parser.add_argument('--config', type=str, default='../config.json', help='Path to custom config file')
 args = parser.parse_args()
 
 config = {
@@ -26,7 +26,7 @@ config = {
     "REPORT_DIR": "../data/reports",
     "LOG_DIR": "../data/log",
     "TEMPLATE": "../static/report.html",
-    "LOG_PATTERN": "nginx-access-ui\\.log-(\\d*)(\\.gz)?",
+    "LOG_PATTERN": "nginx-access-ui\\.log-(\\d{8})(\\.gz)?",
     "LOGGING_FILENAME": None,
     "BAD_MSG_PERC": 20,
 }
@@ -53,11 +53,12 @@ logging.basicConfig(
 )
 
 
-def get_last_log_file(log_dir, log_pattern):
+def get_last_log_file(log_dir_name, list_dir, log_pattern):
     """
     В каталоге с логами ищет самый свежий файл логов nginx,
     возврщает полный путь к этому файлу и его дату создания
-    :param log_dir: str
+    :param log_dir_name: str
+    :param list_dir: list
     :param log_pattern: str
     :return: log_file_path: str
     :return: log_date: datetime object
@@ -67,7 +68,7 @@ def get_last_log_file(log_dir, log_pattern):
     log_date = 0
     log_compress = None
 
-    for filename in os.listdir(log_dir):
+    for filename in list_dir:
         m = re.match(log_pattern, filename)
         if m is not None:
             date, compress = m.groups()
@@ -76,7 +77,7 @@ def get_last_log_file(log_dir, log_pattern):
                 log_file_path, log_date, log_compress = filename, date, compress
 
     if log_file_path:
-        log_file_path = os.path.join(log_dir, log_file_path)
+        log_file_path = os.path.join(log_dir_name, log_file_path)
         log_date = datetime.strptime(str(log_date), '%Y%m%d')
 
     log_file_meta = ['log_file_path', 'year', 'month', 'day', 'compress']
@@ -198,11 +199,11 @@ def main(conf):
     logging.info('-'*50)
     logging.info(f'START GENERATING REPORT')
 
-    log_dir = os.path.abspath(conf['LOG_DIR'])
-    if os.path.isdir(log_dir):
-        logging.info(f'Log folder <{log_dir}>')
+    log_dir_name = os.path.abspath(conf['LOG_DIR'])
+    if os.path.isdir(log_dir_name):
+        logging.info(f'Log folder <{log_dir_name}>')
     else:
-        logging.error(f'Log folder <{log_dir}> not found!')
+        logging.error(f'Log folder <{log_dir_name}> not found!')
         sys.exit(1)
 
     template_path = os.path.abspath(conf['TEMPLATE'])
@@ -224,7 +225,8 @@ def main(conf):
             sys.exit(1)
 
     try:
-        log_meta = get_last_log_file(log_dir, conf['LOG_PATTERN'])
+        list_dir = os.listdir(log_dir_name)
+        log_meta = get_last_log_file(log_dir_name, list_dir, conf['LOG_PATTERN'])
     except:
         logging.exception('Get last log file error. Close')
         sys.exit(1)

@@ -16,6 +16,7 @@ import argparse
 from datetime import datetime
 from collections import defaultdict, namedtuple
 from string import Template
+from statistics import median
 print(os.getcwd())
 parser = argparse.ArgumentParser(description='Log analyzer')
 parser.add_argument('--config', type=str, default='../config.json', help='Path to custom config file')
@@ -26,7 +27,8 @@ config = {
     "REPORT_DIR": "../data/reports",
     "LOG_DIR": "../data/log",
     "TEMPLATE": "../static/report.html",
-    "LOG_PATTERN": "nginx-access-ui\\.log-(\\d{8})(\\.gz)?",
+    "LOG_FILENAME_PATTERN": "nginx-access-ui\\.log-(\\d{8})(?:\\.(gz))?$",
+    "LOG_MSG_PATTERN": "\"[A-Z]+\\s([^\\s]+).+?([\\.\\d]+)$",
     "LOGGING_FILENAME": None,
     "BAD_MSG_PERC": 20,
 }
@@ -53,23 +55,25 @@ logging.basicConfig(
 )
 
 
-def get_last_log_file(log_dir_name, list_dir, log_pattern):
+def get_last_log_file(log_dir_name, list_dir, log_filename_pattern):
     """
-    В каталоге с логами ищет самый свежий файл логов nginx,
-    возврщает полный путь к этому файлу и его дату создания
-    :param log_dir_name: str
-    :param list_dir: list
-    :param log_pattern: str
-    :return: log_file_path: str
-    :return: log_date: datetime object
-    :return: log_compress: str or None
+    Get name of folder with nginx logs, list of files in this folder
+    and pattern for finding nginx logs.
+    Return namedtuple object with absolute path to log file,
+    log date (year, month, date) and compression method.
+
+    Params:
+        log_dir_name: str
+        list_dir: list
+        log_filename_pattern: str
+    :return: namedtuple
     """
     log_file_path = None
     log_date = 0
     log_compress = None
 
     for filename in list_dir:
-        m = re.match(log_pattern, filename)
+        m = re.match(log_filename_pattern, filename)
         if m is not None:
             date, compress = m.groups()
             date = int(date)
@@ -91,37 +95,83 @@ def get_last_log_file(log_dir_name, list_dir, log_pattern):
     )
 
 
-def log_data_generator(open_file, log_compress=None):
+def find_metrics_in_log_msg(compiled_pattern, line):
     """
 
-    :param open_file: file object
-    :param log_compress: str
+    :param compiled_pattern: re.compile object
+    :param line: str
     :return: request_url: str
     :return: request_time: float
     """
-    pattern = '"[A-Z]+\\s([^\\s]+).+?([\\.\\d]+)$'
-    compile_pattern = re.compile(pattern)
+    request_url, request_time = None, None
 
+    res = compiled_pattern.search(line)
+    if res is not None:
+        request_url, request_time = res.groups()
+        request_time = float(request_time)
+
+    return request_url, request_time
+
+
+def log_data_generator(open_file, compiled_pattern, log_compress=None):
+    """
+    Generator for sequential line-by-line log file reading
+    Return url and request time finding in line with <find_metrics_in_log_msg>
+
+    Params:
+        open_file: file object
+        compiled_pattern:
+        og_compress: str
+    :return: request_url: str
+    :return: request_time: float
+    """
     for line in open_file:
         line = line.decode('utf-8') if log_compress else line
         line = line.strip()
-        request_url, request_time = None, None
-
-        res = compile_pattern.search(line)
-        if res is not None:
-            request_url, request_time = res.groups()
-            request_time = float(request_time)
+        request_url, request_time = find_metrics_in_log_msg(compiled_pattern, line)
 
         yield request_url, request_time
+
+
+def aggregate_log_data(data_generator):
+    """
+
+    :param data_generator: generator object
+        tuple: request_url, request_time
+    :return: aggregated_data: dict
+        data in format: {url<str>: [time<float>, ...], ...}
+        for example: {'url1': [1.2, 3.4, ...], 'url2': [5.6, 7.8, ...], ...}
+    :return: total_request_time: float
+    :return: total_count: int
+        total count of parsed requests
+    :return: bad_log_msgs: int
+    """
+    bad_log_msgs = 0
+    total_count = 0
+    total_request_time = float()
+    aggregated_data = defaultdict(list)
+    for request_url, request_time in data_generator:
+        if (request_url is None) or (request_time is None):
+            bad_log_msgs += 1
+            continue
+        aggregated_data[request_url].append(request_time)
+        total_request_time += request_time
+        total_count += 1
+
+    return aggregated_data, total_request_time, total_count, bad_log_msgs
 
 
 def calculate_json_table(aggregated_data, total_request_time, total_count, report_size):
     """
 
     :param aggregated_data: dict
+        data in format: {url<str>: [time<float>, ...], ...}
+        for example: {'url1': [1.2, 3.4, ...], 'url2': [5.6, 7.8, ...], ...}
     :param total_request_time: float
     :param total_count: int
+        total count of parsed requests
     :param report_size: int
+        config["REPORT_SIZE"] - count of urls in report with most total request time
     :return: json_table: str(json)
     """
     table = list()
@@ -135,11 +185,7 @@ def calculate_json_table(aggregated_data, total_request_time, total_count, repor
         url_data['time_avg'] = round(url_data['time_sum'] / url_data['count'], 3)
         url_data['time_perc'] = round(100 * url_data['time_sum'] / total_request_time, 3)
         url_data['count_perc'] = round(100 * url_data['count'] / total_count, 3)
-        middle = url_data['count'] // 2
-        if url_data['count'] % 2 != 0:
-            url_data['time_med'] = round(sorted(time_list)[middle], 3)
-        else:
-            url_data['time_med'] = round(sum(sorted(time_list)[middle - 1:middle + 1]) / 2, 3)
+        url_data['time_med'] = round(median(time_list), 3)
 
         table.append(url_data)
 
@@ -163,31 +209,6 @@ def rendering_report(table, template_path, report_path):
 
     with open(report_path, 'w') as report:
         report.write(report_html)
-
-
-def aggregate_log_data(data):
-    """
-
-    :param data: generator object
-        tuple: request_url, request_time
-    :return: aggregated_data: dict
-    :return: total_request_time: float
-    :return: total_count: int
-    :return: bad_log_msg: int
-    """
-    bad_log_msg = 0
-    total_count = 0
-    total_request_time = float()
-    aggregated_data = defaultdict(list)
-    for request_url, request_time in data:
-        if (request_url is None) or (request_time is None):
-            bad_log_msg += 1
-            continue
-        aggregated_data[request_url].append(request_time)
-        total_request_time += request_time
-        total_count += 1
-
-    return aggregated_data, total_request_time, total_count, bad_log_msg
 
 
 def main(conf):
@@ -226,7 +247,7 @@ def main(conf):
 
     try:
         list_dir = os.listdir(log_dir_name)
-        log_meta = get_last_log_file(log_dir_name, list_dir, conf['LOG_PATTERN'])
+        log_meta = get_last_log_file(log_dir_name, list_dir, conf['LOG_FILENAME_PATTERN'])
     except:
         logging.exception('Get last log file error. Close')
         sys.exit(1)
@@ -245,7 +266,8 @@ def main(conf):
 
     logging.info('Read nginx log file...')
     open_file = gzip.open(log_meta.log_file_path, 'rb') if log_meta.compress else open(log_meta.log_file_path, 'r')
-    log_data = log_data_generator(open_file, log_meta.compress)
+    compiled_pattern = re.compile(conf["LOG_MSG_PATTERN"])
+    log_data = log_data_generator(open_file, compiled_pattern, log_meta.compress)
     try:
         aggregated_data, total_request_time, total_count, bad_log_msg = aggregate_log_data(log_data)
     except gzip.BadGzipFile:

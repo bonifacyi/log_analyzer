@@ -17,9 +17,9 @@ from datetime import datetime
 from collections import defaultdict, namedtuple
 from string import Template
 from statistics import median
-print(os.getcwd())
+
 parser = argparse.ArgumentParser(description='Log analyzer')
-parser.add_argument('--config', type=str, default='../config.json', help='Path to custom config file')
+parser.add_argument('--config', type=str, default='../config.json', help='Path to users config file')
 args = parser.parse_args()
 
 config = {
@@ -33,6 +33,7 @@ config = {
     "BAD_MSG_PERC": 20,
 }
 
+# load json config file
 try:
     with open(args.config) as f:
         cfg = f.read().strip()
@@ -44,9 +45,11 @@ except json.decoder.JSONDecodeError:
     print(f'Config file <{args.config}> is not valid json. Close...')
     sys.exit(1)
 
+# change configuration parameters that are defined in the config file
 for key, value in custom_config.items():
     config[key] = value
 
+# init logging config
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] (%(levelname).1s) %(message)s',
@@ -58,7 +61,7 @@ logging.basicConfig(
 def get_last_log_file(log_dir_name, list_dir, log_filename_pattern):
     """
     Get name of folder with nginx logs, list of files in this folder
-    and pattern for finding nginx logs.
+    and pattern for finding nginx log files.
     Return namedtuple object with absolute path to log file,
     log date (year, month, date) and compression method.
 
@@ -96,21 +99,12 @@ def get_last_log_file(log_dir_name, list_dir, log_filename_pattern):
 
 
 def find_metrics_in_log_msg(compiled_pattern, line):
-    """
-
-    :param compiled_pattern: re.compile object
-    :param line: str
-    :return: request_url: str
-    :return: request_time: float
-    """
-    request_url, request_time = None, None
-
+    metrics = None
     res = compiled_pattern.search(line)
     if res is not None:
-        request_url, request_time = res.groups()
-        request_time = float(request_time)
+        metrics = res.groups()
 
-    return request_url, request_time
+    return metrics
 
 
 def log_data_generator(open_file, compiled_pattern, log_compress=None):
@@ -122,19 +116,19 @@ def log_data_generator(open_file, compiled_pattern, log_compress=None):
         open_file: file object
         compiled_pattern:
         og_compress: str
-    :return: request_url: str
-    :return: request_time: float
+    :return: metrics: tuple
     """
     for line in open_file:
         line = line.decode('utf-8') if log_compress else line
-        line = line.strip()
-        request_url, request_time = find_metrics_in_log_msg(compiled_pattern, line)
 
-        yield request_url, request_time
+        yield find_metrics_in_log_msg(compiled_pattern, line)
 
 
 def aggregate_log_data(data_generator):
     """
+    Parse log file with log_data_generator (it returned tuple with metrics),
+    gather metrics to default dict 'aggregated_data',
+    calculate total requests time, total number of requests, total number of bad messages
 
     :param data_generator: generator object
         tuple: request_url, request_time
@@ -143,18 +137,23 @@ def aggregate_log_data(data_generator):
         for example: {'url1': [1.2, 3.4, ...], 'url2': [5.6, 7.8, ...], ...}
     :return: total_request_time: float
     :return: total_count: int
-        total count of parsed requests
+        total number of parsed requests
     :return: bad_log_msgs: int
     """
     bad_log_msgs = 0
     total_count = 0
     total_request_time = float()
     aggregated_data = defaultdict(list)
-    for request_url, request_time in data_generator:
-        if (request_url is None) or (request_time is None):
+    for metrics in data_generator:
+        if metrics is None:
             bad_log_msgs += 1
             continue
+
+        request_url, request_time = metrics
+        request_time = float(request_time)
+
         aggregated_data[request_url].append(request_time)
+
         total_request_time += request_time
         total_count += 1
 
@@ -163,16 +162,19 @@ def aggregate_log_data(data_generator):
 
 def calculate_json_table(aggregated_data, total_request_time, total_count, report_size):
     """
+    Calculate report and convert it to json table
 
-    :param aggregated_data: dict
-        data in format: {url<str>: [time<float>, ...], ...}
-        for example: {'url1': [1.2, 3.4, ...], 'url2': [5.6, 7.8, ...], ...}
-    :param total_request_time: float
-    :param total_count: int
-        total count of parsed requests
-    :param report_size: int
-        config["REPORT_SIZE"] - count of urls in report with most total request time
+    Params:
+        aggregated_data: dict
+            data in format: {url<str>: [time<float>, ...], ...}
+            for example: {'url1': [1.2, 3.4, ...], 'url2': [5.6, 7.8, ...], ...}
+        total_request_time: float
+        total_count: int
+            total number of parsed requests
+        report_size: int
+            config["REPORT_SIZE"] - count of urls in report with most total request time
     :return: json_table: str(json)
+        report serialized to json table
     """
     table = list()
     for url, time_list in aggregated_data.items():
@@ -196,10 +198,10 @@ def calculate_json_table(aggregated_data, total_request_time, total_count, repor
 
 def rendering_report(table, template_path, report_path):
     """
-
-    :param table: str(json)
-    :param template_path: str(full path)
-    :param report_path: str(full path)
+    Params:
+        table: str(json)
+        template_path: str(full path)
+        report_path: str(full path)
     :return: None
     """
     with open(template_path, 'r') as tmpl:
@@ -212,11 +214,7 @@ def rendering_report(table, template_path, report_path):
 
 
 def main(conf):
-    """
 
-    :param conf: dict
-    :return: None
-    """
     logging.info('-'*50)
     logging.info(f'START GENERATING REPORT')
 
@@ -287,7 +285,7 @@ def main(conf):
         logging.error(f'Count of bad log messages more then limit {conf["BAD_MSG_PERC"]}%')
         sys.exit(1)
 
-    logging.info('Calculate and convert json report')
+    logging.info('Calculate report and convert it to json')
     try:
         json_table = calculate_json_table(
             aggregated_data,
@@ -296,7 +294,7 @@ def main(conf):
             conf['REPORT_SIZE']
         )
     except:
-        logging.exception(f'Generate json error. Close')
+        logging.exception(f'Generate json report error. Close')
         sys.exit(1)
     logging.info('Calculate and convert json report success')
 

@@ -1,10 +1,11 @@
+data/
+*log_analyzer.log*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 .idea/
-data/
-log_analyzer/log_analyzer.log
 
 # C extensions
 *.so

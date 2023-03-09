@@ -5,26 +5,12 @@ import re
 import json
 from log_analyzer import log_analyzer
 
-'''list_dir = [
-            'nginx-access-ui.log-20200630.zip',
-            'nginx-access-ui.log-20200630.123abc.gz',
-            'nginx-access-ui.log-20200630123abc.gz',
-            'abc123nginx-access-ui.log-20200630.gz',
-            'nginx-access-ui.log-20170630.gz',
-]
-ans = log_analyzer.get_last_log_file('log', list_dir, log_analyzer.config["LOG_PATTERN"])
-print(ans)'''
-
 
 class LogAnalyzerTestCase(unittest.TestCase):
     """
 
     """
     def test_finding_last_log_file(self):
-        """
-
-        :return:
-        """
         list_dir = [
             'nginx-access-ui.log-20200630.zip',
             'nginx-access-ui.log-20200630.123abc.gz',
@@ -46,21 +32,13 @@ class LogAnalyzerTestCase(unittest.TestCase):
         self.assertEqual(log_meta.compress, 'gz')
 
     def test_find_metrics_in_log_msg(self):
-        """
-
-        :return:
-        """
         msg = '5.6.7.8 -  c8 [2/J/7:3 +3] "POST /a.1/b2/c/?d&e=WIN H/1.1" 200 22 "-" "p" 2.654'
         compiled_pattern = re.compile(log_analyzer.config["LOG_MSG_PATTERN"])
         url, time = log_analyzer.find_metrics_in_log_msg(compiled_pattern, msg)
         self.assertEqual(url, '/a.1/b2/c/?d&e=WIN')
-        self.assertEqual(time, 2.654)
+        self.assertEqual(time, '2.654')
 
     def test_calculate_json_table(self):
-        """
-
-        :return:
-        """
         data = {
             'a/b/1': [1.0, 2.0, 5.0],
             'a/b/2': [1.0, 2.0, 5.0, 10.0],

@@ -33,29 +33,32 @@ config = {
     "BAD_MSG_PERC": 20,
 }
 
-# load json config file
-try:
-    with open(args.config) as f:
-        cfg = f.read().strip()
-        custom_config = json.loads(cfg) if cfg else dict()
-except FileNotFoundError:
-    print(f'Config file <{args.config}> not found. Close...')
-    sys.exit(1)
-except json.decoder.JSONDecodeError:
-    print(f'Config file <{args.config}> is not valid json. Close...')
-    sys.exit(1)
 
-# change configuration parameters that are defined in the config file
-for key, value in custom_config.items():
-    config[key] = value
+def load_config_file(conf, config_file_path):
+    """
+    Load json config file and update script config
 
-# init logging config
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] (%(levelname).1s) %(message)s',
-    datefmt='%Y.%m.%d %H:%M:%S',
-    filename=config["LOGGING_FILENAME"],
-)
+    Params:
+        conf: dict
+        config_file: str
+    :return: conf: dict
+    """
+    try:
+        with open(config_file_path) as f:
+            cfg = f.read().strip()
+            custom_config = json.loads(cfg) if cfg else dict()
+    except FileNotFoundError:
+        print(f'Config file <{config_file_path}> not found. Close...')
+        sys.exit(1)
+    except json.decoder.JSONDecodeError:
+        print(f'Config file <{config_file_path}> is not valid json. Close...')
+        sys.exit(1)
+
+    # change configuration parameters that are defined in the config file
+    for key, value in custom_config.items():
+        conf[key] = value
+
+    return conf
 
 
 def get_last_log_file(log_dir_name, list_dir, log_filename_pattern):
@@ -270,11 +273,9 @@ def main(conf):
         aggregated_data, total_request_time, total_count, bad_log_msg = aggregate_log_data(log_data)
     except gzip.BadGzipFile:
         logging.error(f'Bad gzip file <{log_meta.log_file_path}>. Close')
-        open_file.close()
         sys.exit(1)
     except:
         logging.exception('Aggregate log error. Close')
-        open_file.close()
         sys.exit(1)
     finally:
         open_file.close()
@@ -307,4 +308,16 @@ def main(conf):
 
 
 if __name__ == "__main__":
+    # update config
+    config_file = os.path.abspath(args.config)
+    config = load_config_file(config, config_file)
+
+    # init logging config
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] (%(levelname).1s) %(message)s',
+        datefmt='%Y.%m.%d %H:%M:%S',
+        filename=config["LOGGING_FILENAME"],
+    )
+
     main(config)

@@ -18,9 +18,6 @@ from collections import defaultdict, namedtuple
 from string import Template
 from statistics import median
 
-parser = argparse.ArgumentParser(description='Log analyzer')
-parser.add_argument('--config', type=str, default='../config.json', help='Path to users config file')
-args = parser.parse_args()
 
 config = {
     "REPORT_SIZE": 1000,
@@ -219,7 +216,7 @@ def rendering_report(table, template_path, report_path):
 def main(conf):
 
     logging.info('-'*50)
-    logging.info(f'START GENERATING REPORT')
+    logging.info('START GENERATING REPORT')
 
     log_dir_name = os.path.abspath(conf['LOG_DIR'])
     if os.path.isdir(log_dir_name):
@@ -308,8 +305,16 @@ def main(conf):
 
 
 if __name__ == "__main__":
+    # parse script arguments
+    parser = argparse.ArgumentParser(description='Log analyzer')
+    parser.add_argument('--config', type=str, default='../config.json', help='Path to users config file')
+    args = parser.parse_args()
+
+    # change working directory
+    os.chdir(os.path.dirname(__file__))
+
     # update config
-    config_file = os.path.abspath(args.config)
+    config_file = os.path.join(args.config)
     config = load_config_file(config, config_file)
 
     # init logging config
